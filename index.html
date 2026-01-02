@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>VP Trainer</title>
+    <style>
+        :root {
+            --primary: #007bff;
+            --success: #28a745;
+            --danger: #dc3545;
+            --bg: #f8f9fa;
+            --card-bg: #fff;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            margin: 0;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            box-sizing: border-box;
+            touch-action: manipulation; /* Improves touch response */
+        }
+
+        .container {
+            width: 100%;
+            max-width: 450px; /* Constrain width on tablets/desktop */
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        /* HEADER */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 5px;
+        }
+        .title { font-size: 20px; font-weight: 800; color: #333; }
+        .streak { font-size: 16px; font-weight: 600; background: #e9ecef; padding: 4px 10px; border-radius: 12px; }
+
+        /* CARD GRID */
+        .card-row {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 6px;
+        }
+
+        /* CARD STYLE */
+        .card {
+            background: var(--card-bg);
+            border: 2px solid #333;
+            border-radius: 8px;
+            aspect-ratio: 0.65;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            position: relative;
+        }
+        .card-rank { font-size: 1.2rem; font-weight: 700; line-height: 1; }
+        .card-suit { font-size: 1.8rem; line-height: 1; margin-top: 2px; }
+        .red { color: #d32f2f; border-color: #d32f2f; }
+        .black { color: #212121; border-color: #212121; }
+
+        /* HOLD BUTTONS */
+        .btn-row {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 6px;
+        }
+        .hold-btn {
+            width: 100%;
+            padding: 12px 0;
+            border: none;
+            border-radius: 6px;
+            font-weight: 700;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.1s;
+            background-color: #e0e0e0;
+            color: #555;
+        }
+        .hold-btn.held {
+            background-color: var(--danger);
+            color: white;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+        }
+
+        /* MAIN ACTION BUTTON */
+        .action-btn {
+            width: 100%;
+            padding: 15px;
+            font-size: 18px;
+            font-weight: bold;
+            color: white;
+            background-color: var(--primary);
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        .action-btn:active { transform: scale(0.98); }
+
+        /* FEEDBACK AREA */
+        #feedback {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            display: none; /* Hidden by default */
+            text-align: center;
+        }
+        .correct-msg { color: var(--success); font-weight: bold; font-size: 18px; }
+        .wrong-msg { color: var(--danger); font-weight: bold; font-size: 18px; }
+        .reason-text { color: #666; font-size: 14px; margin-top: 5px; }
+        .detail-row {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 10px;
+            font-size: 14px;
+            color: #333;
+        }
+
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <div class="title">VP Trainer</div>
+        <div class="streak">Streak: <span id="streakVal">0</span> 🔥</div>
+    </div>
+
+    <div class="card-row" id="cardContainer">
+        </div>
+
+    <div class="btn-row" id="btnContainer">
+        <button class="hold-btn" onclick="toggleHold(0)">HOLD</button>
+        <button class="hold-btn" onclick="toggleHold(1)">HOLD</button>
+        <button class="hold-btn" onclick="toggleHold(2)">HOLD</button>
+        <button class="hold-btn" onclick="toggleHold(3)">HOLD</button>
+        <button class="hold-btn" onclick="toggleHold(4)">HOLD</button>
+    </div>
+
+    <div id="feedback"></div>
+
+    <button class="action-btn" id="mainBtn" onclick="handleAction()">CHECK HAND</button>
+</div>
+
+<script>
+    // --- STATE ---
+    let deck = [];
+    let hand = [];
+    let holds = [false, false, false, false, false];
+    let streak = 0;
+    let gameState = 'DEAL'; // DEAL, CHECK, RESULT
+
+    // --- STRATEGY ENGINE (Ported from Python) ---
+    const RANKS = [2,3,4,5,6,7,8,9,10,11,12,13,14];
+    const SUITS = ['H','D','C','S'];
+
+    function createDeck() {
+        let d = [];
+        for (let r of RANKS) {
+            for (let s of SUITS) {
+                d.push({r, s});
+            }
+        }
+        return d;
+    }
+
+    function getStrategyHolds(hand) {
+        // Pre-process hand data
+        const ranks = hand.map(c => c.r).sort((a,b) => a-b);
+        const suits = hand.map(c => c.s);
+        
+        // Counts
+        const counts = {};
+        ranks.forEach(r => counts[r] = (counts[r] || 0) + 1);
+        const countVals = Object.values(counts);
+        
+        // High cards (J=11+)
+        const highIdx = hand.map((c, i) => c.r >= 11 ? i : -1).filter(i => i !== -1);
+        
+        // Flush/Straight Checks
+        const isFlush = suits.every(s => s === suits[0]);
+        let isStraight = false;
+        const uniqueRanks = [...new Set(ranks)];
+        if (uniqueRanks.length === 5) {
+            if (ranks[4] - ranks[0] === 4) isStraight = true;
+            if (ranks[0]===2 && ranks[1]===3 && ranks[2]===4 && ranks[3]===5 && ranks[4]===14) isStraight = true; // Wheel
+        }
+
+        // Helpers
+        const getIdxByRank = (r) => hand.map((c, i) => c.r === r ? i : -1).filter(i => i !== -1);
+        
+        const isNToRoyal = (n) => {
+            const targets = [10,11,12,13,14];
+            for (let s of SUITS) {
+                if (suits.filter(x => x === s).length >= n) {
+                    let suitedIdx = hand.map((c, i) => c.s === s ? i : -1).filter(i => i !== -1);
+                    let royalParts = suitedIdx.filter(i => targets.includes(hand[i].r));
+                    if (royalParts.length >= n) return royalParts;
+                }
+            }
+            return null;
+        };
+
+        const isNToSF = (n) => {
+            for (let s of SUITS) {
+                if (suits.filter(x => x === s).length >= n) {
+                    let idx = hand.map((c, i) => c.s === s ? i : -1).filter(i => i !== -1);
+                    let r = idx.map(i => hand[i].r).sort((a,b) => a-b);
+                    
+                    // Standard Span Check
+                    let span = r[r.length-1] - r[0];
+                    let distinct = new Set(r).size;
+                    if (span <= 4 && distinct === n) return idx;
+
+                    // Low Ace Check (A,2,3...)
+                    if (r.includes(14)) {
+                        let lowR = r.map(x => x === 14 ? 1 : x).sort((a,b) => a-b);
+                        if ((lowR[lowR.length-1] - lowR[0] <= 4) && (new Set(lowR).size === n)) return idx;
+                    }
+                }
+            }
+            return null;
+        };
+
+        // --- 16-POINT PRIORITY LOGIC ---
+        
+        // 1. Pat Hands
+        if (countVals.includes(4)) return {idx: getIdxByRank(parseInt(Object.keys(counts).find(k => counts[k]===4))), reason: "Four of a Kind"};
+        if (isFlush && isStraight) return {idx: [0,1,2,3,4], reason: "Straight Flush"};
+        
+        // 2. 4 to Royal
+        let r4 = isNToRoyal(4); if (r4) return {idx: r4, reason: "4 to Royal Flush"};
+
+        // 3. Pat Hands (Standard)
+        if ((countVals.includes(3) && countVals.includes(2)) || isFlush || isStraight) return {idx: [0,1,2,3,4], reason: "Pat Hand"};
+        if (countVals.includes(3)) return {idx: getIdxByRank(parseInt(Object.keys(counts).find(k => counts[k]===3))), reason: "Three of a Kind"};
+        
+        // 4. 4 to SF
+        let sf4 = isNToSF(4); if (sf4) return {idx: sf4, reason: "4 to Straight Flush"};
+
+        // 5. Two Pair
+        if (countVals.filter(x => x===2).length === 2) {
+            let pairs = Object.keys(counts).filter(k => counts[k]===2).map(Number);
+            return {idx: hand.map((c, i) => pairs.includes(c.r) ? i : -1).filter(i => i!==-1), reason: "Two Pair"};
+        }
+
+        // 6. High Pair (J+)
+        for (let r in counts) {
+            if (counts[r]===2 && parseInt(r)>=11) return {idx: getIdxByRank(parseInt(r)), reason: "High Pair"};
+        }
+
+        // 7. 3 to Royal
+        let r3 = isNToRoyal(3); if (r3) return {idx: r3, reason: "3 to Royal Flush"};
+
+        // 8. 4 to Flush
+        for (let s of SUITS) {
+            if (suits.filter(x => x===s).length === 4) return {idx: hand.map((c,i) => c.s===s?i:-1).filter(i=>i!==-1), reason: "4 to Flush"};
+        }
+
+        // 9. Low Pair
+        for (let r in counts) {
+            if (counts[r]===2 && parseInt(r)<=10) return {idx: getIdxByRank(parseInt(r)), reason: "Low Pair"};
+        }
+
+        // 10. 4 to Outside Straight
+        // Simplified check for pure outside straight (e.g. 4,5,6,7)
+        for (let i=0; i < ranks.length-3; i++) {
+            let window = ranks.slice(i, i+4);
+            if (window[3]-window[0]===3 && new Set(window).size===4) {
+                 return {idx: hand.map((c,idx) => window.includes(c.r)?idx:-1).filter(idx=>idx!==-1), reason: "4 to Outside Straight"};
+            }
+        }
+
+        // 11. 2 Suited High Cards
+        if (highIdx.length >= 2) {
+            for (let i=0; i<highIdx.length; i++) {
+                for (let j=i+1; j<highIdx.length; j++) {
+                    if (hand[highIdx[i]].s === hand[highIdx[j]].s) return {idx: [highIdx[i], highIdx[j]], reason: "2 Suited High Cards"};
+                }
+            }
+        }
+
+        // 12. 3 to SF
+        let sf3 = isNToSF(3); if (sf3) return {idx: sf3, reason: "3 to Straight Flush"};
+
+        // 13. 2 Unsuited High Cards (Lowest 2)
+        if (highIdx.length >= 2) {
+            // Sort indices by rank value to pick lowest
+            let sortedHigh = highIdx.sort((a,b) => hand[a].r - hand[b].r);
+            return {idx: [sortedHigh[0], sortedHigh[1]], reason: "2 Unsuited High Cards"};
+        }
+
+        // 14. Suited 10 with J/Q/K
+        let tenIdx = hand.findIndex(c => c.r === 10);
+        if (tenIdx !== -1) {
+            let s = hand[tenIdx].s;
+            let faceIdx = hand.findIndex(c => c.r >= 11 && c.s === s);
+            if (faceIdx !== -1) return {idx: [tenIdx, faceIdx].sort((a,b)=>a-b), reason: "Suited 10 + Face"};
+        }
+
+        // 15. One High Card
+        if (highIdx.length >= 1) {
+             let sortedHigh = highIdx.sort((a,b) => hand[a].r - hand[b].r);
+             return {idx: [sortedHigh[0]], reason: "One High Card"};
+        }
+
+        // 16. Discard All
+        return {idx: [], reason: "Discard All"};
+    }
+
+
+    // --- UI FUNCTIONS ---
+
+    function initGame() {
+        deck = createDeck();
+        dealHand();
+    }
+
+    function dealHand() {
+        // Simple Shuffle
+        deck.sort(() => Math.random() - 0.5);
+        
+        hand = deck.slice(0, 5);
+        holds = [false, false, false, false, false];
+        gameState = 'CHECK';
+        
+        renderCards();
+        renderButtons();
+        
+        // Reset Feedback
+        document.getElementById('feedback').style.display = 'none';
+        const btn = document.getElementById('mainBtn');
+        btn.innerText = "CHECK HAND";
+        btn.style.backgroundColor = "#007bff";
+    }
+
+    function renderCards() {
+        const container = document.getElementById('cardContainer');
+        container.innerHTML = '';
+        
+        hand.forEach(c => {
+            const rMap = {11:'J', 12:'Q', 13:'K', 14:'A'};
+            const displayRank = rMap[c.r] || c.r;
+            const suitMap = {'H':'♥', 'D':'♦', 'C':'♣', 'S':'♠'};
+            const displaySuit = suitMap[c.s];
+            const cssClass = (c.s === 'H' || c.s === 'D') ? 'card red' : 'card black';
+            
+            container.innerHTML += `
+                <div class="${cssClass}">
+                    <div class="card-rank">${displayRank}</div>
+                    <div class="card-suit">${displaySuit}</div>
+                </div>
+            `;
+        });
+    }
+
+    function renderButtons() {
+        const btns = document.querySelectorAll('.hold-btn');
+        btns.forEach((btn, i) => {
+            if (holds[i]) {
+                btn.classList.add('held');
+                btn.innerText = "HELD";
+            } else {
+                btn.classList.remove('held');
+                btn.innerText = "HOLD";
+            }
+            // Disable buttons if looking at result
+            btn.disabled = (gameState === 'RESULT');
+        });
+    }
+
+    function toggleHold(idx) {
+        if (gameState === 'RESULT') return;
+        holds[idx] = !holds[idx];
+        renderButtons();
+    }
+
+    function handleAction() {
+        if (gameState === 'CHECK') {
+            checkAnswer();
+        } else {
+            dealHand();
+        }
+    }
+
+    function checkAnswer() {
+        const userIdx = holds.map((h, i) => h ? i : -1).filter(i => i !== -1);
+        const strategy = getStrategyHolds(hand);
+        const correctIdx = strategy.idx.sort();
+        
+        const isCorrect = JSON.stringify(userIdx.sort()) === JSON.stringify(correctIdx.sort());
+        
+        const feedbackDiv = document.getElementById('feedback');
+        feedbackDiv.style.display = 'block';
+        
+        if (isCorrect) {
+            streak++;
+            feedbackDiv.innerHTML = `
+                <div class="correct-msg">✅ Correct!</div>
+                <div class="reason-text">${strategy.reason}</div>
+            `;
+        } else {
+            streak = 0;
+            // Format indices to readable card numbers (1-5)
+            const correctReadable = correctIdx.length ? correctIdx.map(i=>`#${i+1}`).join(', ') : "None";
+            const userReadable = userIdx.length ? userIdx.map(i=>`#${i+1}`).join(', ') : "None";
+            
+            feedbackDiv.innerHTML = `
+                <div class="wrong-msg">❌ Incorrect</div>
+                <div class="reason-text">Best Play: <b>${strategy.reason}</b></div>
+                <div class="detail-row">
+                    <span>You: ${userReadable}</span>
+                    <span>Best: ${correctReadable}</span>
+                </div>
+            `;
+        }
+        
+        document.getElementById('streakVal').innerText = streak;
+        
+        // Update Main Button
+        const btn = document.getElementById('mainBtn');
+        btn.innerText = "DEAL NEXT HAND";
+        btn.style.backgroundColor = isCorrect ? "#28a745" : "#dc3545";
+        
+        gameState = 'RESULT';
+        renderButtons(); // To disable them
+    }
+
+    // Start
+    initGame();
+
+</script>
+</body>
+</html>
